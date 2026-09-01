@@ -18,6 +18,7 @@ import {
 import {
 	buildSessionContext,
 	type CompactionEntry,
+	type ContextWindowEntry,
 	type CustomMessageEntry,
 	type ModelChangeEntry,
 	migrateSessionEntries,
@@ -102,6 +103,20 @@ function createCompactionEntry(summary: string, firstKeptEntryId: string): Compa
 		timestamp: new Date().toISOString(),
 		summary,
 		firstKeptEntryId,
+		tokensBefore: 10000,
+	};
+	lastId = id;
+	return entry;
+}
+
+function createContextWindowEntry(handoff?: string): ContextWindowEntry {
+	const id = `test-id-${entryCounter++}`;
+	const entry: ContextWindowEntry = {
+		type: "context_window",
+		id,
+		parentId: lastId,
+		timestamp: new Date().toISOString(),
+		handoff,
 		tokensBefore: 10000,
 	};
 	lastId = id;
@@ -481,6 +496,29 @@ describe("prepareCompaction", () => {
 		expect(preparation?.isSplitTurn).toBe(true);
 		expect(preparation?.messagesToSummarize).toEqual([]);
 		expect(preparation?.turnPrefixMessages).toEqual([user.message]);
+	});
+});
+
+describe("prepareCompaction with context windows", () => {
+	it("never summarizes entries from an earlier window", () => {
+		const oldUser = createMessageEntry(createUserMessage("old secret ".repeat(100)));
+		const oldAssistant = createMessageEntry(createAssistantMessage("old response ".repeat(100)));
+		const boundary = createContextWindowEntry("current task");
+		const currentUser = createMessageEntry(createUserMessage("current first ".repeat(100)));
+		const currentAssistant = createMessageEntry(createAssistantMessage("current response ".repeat(100)));
+		const recentUser = createMessageEntry(createUserMessage("recent request ".repeat(100)));
+		const recentAssistant = createMessageEntry(createAssistantMessage("recent response ".repeat(100)));
+		const settings: CompactionSettings = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 100 };
+
+		const preparation = prepareCompaction(
+			[oldUser, oldAssistant, boundary, currentUser, currentAssistant, recentUser, recentAssistant],
+			settings,
+		);
+
+		expect(preparation).toBeDefined();
+		const summarizedText = extractText(preparation!.messagesToSummarize);
+		expect(summarizedText).toContain("current first");
+		expect(summarizedText).not.toContain("old secret");
 	});
 });
 

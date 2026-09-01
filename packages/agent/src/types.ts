@@ -136,6 +136,8 @@ export interface ShouldStopAfterTurnContext {
 	context: AgentContext;
 	/** Messages that this loop invocation will return if it exits at this point. Prompt runs include the initial prompt messages; continuation runs do not include pre-existing context messages. */
 	newMessages: AgentMessage[];
+	/** A successful tool request to start the next turn with a fresh context window. */
+	newContext?: NewContextRequest;
 }
 
 /** Replacement runtime state used by the agent loop before starting another provider request. */
@@ -378,6 +380,12 @@ export interface AgentState {
 	readonly errorMessage?: string;
 }
 
+/** Request carried by a successful tool result to start a fresh context window. */
+export interface NewContextRequest {
+	/** Optional continuation state injected into the new window. */
+	handoff?: string;
+}
+
 /** Final or partial result produced by a tool. */
 export interface AgentToolResult<T> {
 	/** Text or image content returned to the model. */
@@ -386,6 +394,10 @@ export interface AgentToolResult<T> {
 	details: T;
 	/** Usage from the final tool execution itself, if available. Not used for main LLM context accounting. */
 	usage?: Usage;
+	/** Names of tools introduced by this result and available from this transcript point onward. */
+	addedToolNames?: string[];
+	/** Start the next turn in a fresh context window after the full tool batch succeeds. */
+	newContext?: NewContextRequest;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
