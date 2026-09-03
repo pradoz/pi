@@ -130,6 +130,8 @@ export type {
 	ResourcesDiscoverResult,
 	SendMessageHandler,
 	SendUserMessageHandler,
+	SessionBeforeAutoCompactEvent,
+	SessionBeforeAutoCompactResult,
 	SessionBeforeCompactEvent,
 	SessionBeforeCompactResult,
 	SessionBeforeForkEvent,

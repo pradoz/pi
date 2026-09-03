@@ -128,6 +128,8 @@ export type {
 	ResolvedCommand,
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
+	SessionBeforeAutoCompactEvent,
+	SessionBeforeAutoCompactResult,
 	SessionBeforeCompactEvent,
 	SessionBeforeCompactResult,
 	SessionBeforeForkEvent,
