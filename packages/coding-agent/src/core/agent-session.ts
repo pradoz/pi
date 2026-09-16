@@ -563,7 +563,6 @@ export class AgentSession {
 		this._emit({ type: "message_end", message: marker });
 
 		return {
-			systemPrompt: this.agent.state.systemPrompt,
 			messages: messages.slice(),
 			tools: this.agent.state.tools.slice(),
 		};

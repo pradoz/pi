@@ -96,7 +96,7 @@ describe("AgentSession prompt characterization", () => {
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("reset", {}), { stopReason: "toolUse" }),
 			(context) => {
-				secondRequestTexts = context.messages.map(getMessageText);
+				secondRequestTexts = context.messages.map(getMessageText).filter(Boolean);
 				return fauxAssistantMessage("continued");
 			},
 		]);
@@ -106,14 +106,15 @@ describe("AgentSession prompt characterization", () => {
 		expect(secondRequestTexts).toEqual([
 			expect.stringContaining("Handoff from the previous window:\ncontinue from the handoff"),
 		]);
-		expect(harness.session.messages.map((message) => message.role)).toEqual(["custom", "assistant"]);
-		expect(harness.sessionManager.getBranch().map((entry) => entry.type)).toEqual([
-			"message",
-			"message",
-			"message",
-			"context_window",
-			"message",
-		]);
+		expect(
+			harness.session.messages.filter((message) => message.role !== "system").map((message) => message.role),
+		).toEqual(["custom", "assistant"]);
+		expect(
+			harness.sessionManager
+				.getBranch()
+				.filter((entry) => entry.type !== "message" || entry.message.role !== "system")
+				.map((entry) => entry.type),
+		).toEqual(["message", "message", "message", "context_window", "message"]);
 	});
 
 	it("continues in a fresh context after an extension requests rollover at turn end", async () => {
@@ -134,7 +135,7 @@ describe("AgentSession prompt characterization", () => {
 		harness.setResponses([
 			fauxAssistantMessage("first response"),
 			(context) => {
-				secondRequestTexts = context.messages.map(getMessageText);
+				secondRequestTexts = context.messages.map(getMessageText).filter(Boolean);
 				return fauxAssistantMessage("second response");
 			},
 		]);
@@ -142,7 +143,9 @@ describe("AgentSession prompt characterization", () => {
 		await harness.session.prompt("start");
 
 		expect(secondRequestTexts).toEqual([expect.stringContaining("policy handoff")]);
-		expect(harness.session.messages.map((message) => message.role)).toEqual(["custom", "assistant"]);
+		expect(
+			harness.session.messages.filter((message) => message.role !== "system").map((message) => message.role),
+		).toEqual(["custom", "assistant"]);
 		expect(harness.sessionManager.getBranch().some((entry) => entry.type === "context_window")).toBe(true);
 	});
 
@@ -169,7 +172,7 @@ describe("AgentSession prompt characterization", () => {
 
 		expect(harness.getPendingResponseCount()).toBe(1);
 		expect(harness.sessionManager.getBranch().some((entry) => entry.type === "context_window")).toBe(false);
-		expect(harness.session.messages).toHaveLength(2);
+		expect(harness.session.messages.filter((message) => message.role !== "system")).toHaveLength(2);
 	});
 
 	it("bounds native context handoffs", async () => {

@@ -394,8 +394,6 @@ export interface AgentToolResult<T> {
 	details: T;
 	/** Usage from the final tool execution itself, if available. Not used for main LLM context accounting. */
 	usage?: Usage;
-	/** Names of tools introduced by this result and available from this transcript point onward. */
-	addedToolNames?: string[];
 	/** Start the next turn in a fresh context window after the full tool batch succeeds. */
 	newContext?: NewContextRequest;
 	/**

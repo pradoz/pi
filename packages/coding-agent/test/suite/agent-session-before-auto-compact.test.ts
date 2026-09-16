@@ -21,7 +21,10 @@ function claimRollover(seen: Array<{ reason: string; willRetry: boolean }> = [])
 }
 
 function entryTypes(harness: Harness): string[] {
-	return harness.sessionManager.getBranch().map((entry) => entry.type);
+	return harness.sessionManager
+		.getBranch()
+		.filter((entry) => entry.type !== "message" || entry.message.role !== "system")
+		.map((entry) => entry.type);
 }
 
 function countType(harness: Harness, type: string): number {
@@ -59,7 +62,7 @@ describe("session_before_auto_compact", () => {
 		harness.setResponses([
 			overflowResponse(),
 			(context) => {
-				retryTexts = context.messages.map(getMessageText);
+				retryTexts = context.messages.map(getMessageText).filter(Boolean);
 				return fauxAssistantMessage("continued in a fresh window");
 			},
 		]);
@@ -70,7 +73,10 @@ describe("session_before_auto_compact", () => {
 		expect(countType(harness, "context_window")).toBe(1);
 		expect(countType(harness, "compaction")).toBe(0);
 		expect(retryTexts).toEqual([expect.stringContaining("handoff after overflow")]);
-		expect(harness.session.messages.map((m) => m.role)).toEqual(["custom", "assistant"]);
+		expect(harness.session.messages.filter((m) => m.role !== "system").map((m) => m.role)).toEqual([
+			"custom",
+			"assistant",
+		]);
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
@@ -90,7 +96,7 @@ describe("session_before_auto_compact", () => {
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("dump", {}), { stopReason: "toolUse" }),
 			(context) => {
-				secondTexts = context.messages.map(getMessageText);
+				secondTexts = context.messages.map(getMessageText).filter(Boolean);
 				return fauxAssistantMessage("done");
 			},
 		]);

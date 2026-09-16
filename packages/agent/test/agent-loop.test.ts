@@ -1166,33 +1166,27 @@ describe("agentLoop with AgentMessage", () => {
 		};
 
 		let llmCalls = 0;
-		const stream = agentLoop(
-			[createUserMessage("work")],
-			{ systemPrompt: "", messages: [], tools: [tool] },
-			config,
-			undefined,
-			() => {
-				llmCalls++;
-				const mockStream = new MockAssistantStream();
-				queueMicrotask(() => {
-					mockStream.push({
-						type: "done",
-						reason: llmCalls === 1 ? "toolUse" : "stop",
-						message:
-							llmCalls === 1
-								? createAssistantMessage(
-										[
-											{ type: "toolCall", id: "reset", name: "work", arguments: { value: "reset" } },
-											{ type: "toolCall", id: "slow", name: "work", arguments: { value: "slow" } },
-										],
-										"toolUse",
-									)
-								: createAssistantMessage([{ type: "text", text: "done" }]),
-					});
+		const stream = agentLoop([createUserMessage("work")], { messages: [], tools: [tool] }, config, undefined, () => {
+			llmCalls++;
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				mockStream.push({
+					type: "done",
+					reason: llmCalls === 1 ? "toolUse" : "stop",
+					message:
+						llmCalls === 1
+							? createAssistantMessage(
+									[
+										{ type: "toolCall", id: "reset", name: "work", arguments: { value: "reset" } },
+										{ type: "toolCall", id: "slow", name: "work", arguments: { value: "slow" } },
+									],
+									"toolUse",
+								)
+							: createAssistantMessage([{ type: "text", text: "done" }]),
 				});
-				return mockStream;
-			},
-		);
+			});
+			return mockStream;
+		});
 
 		for await (const _event of stream) {
 			// consume
@@ -1232,7 +1226,7 @@ describe("agentLoop with AgentMessage", () => {
 		};
 		const stream = agentLoop(
 			[createUserMessage("work")],
-			{ systemPrompt: "", messages: [], tools: [tool] },
+			{ messages: [], tools: [tool] },
 			config,
 			controller.signal,
 			() => {
@@ -1288,30 +1282,24 @@ describe("agentLoop with AgentMessage", () => {
 		};
 
 		let llmCalls = 0;
-		const stream = agentLoop(
-			[createUserMessage("work")],
-			{ systemPrompt: "", messages: [], tools: [tool] },
-			config,
-			undefined,
-			() => {
-				llmCalls++;
-				const mockStream = new MockAssistantStream();
-				queueMicrotask(() => {
-					const message =
-						llmCalls === 1
-							? createAssistantMessage(
-									[
-										{ type: "toolCall", id: "reset", name: "work", arguments: { reset: true } },
-										{ type: "toolCall", id: "fail", name: "work", arguments: { reset: false } },
-									],
-									"toolUse",
-								)
-							: createAssistantMessage([{ type: "text", text: "done" }]);
-					mockStream.push({ type: "done", reason: llmCalls === 1 ? "toolUse" : "stop", message });
-				});
-				return mockStream;
-			},
-		);
+		const stream = agentLoop([createUserMessage("work")], { messages: [], tools: [tool] }, config, undefined, () => {
+			llmCalls++;
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message =
+					llmCalls === 1
+						? createAssistantMessage(
+								[
+									{ type: "toolCall", id: "reset", name: "work", arguments: { reset: true } },
+									{ type: "toolCall", id: "fail", name: "work", arguments: { reset: false } },
+								],
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+				mockStream.push({ type: "done", reason: llmCalls === 1 ? "toolUse" : "stop", message });
+			});
+			return mockStream;
+		});
 
 		for await (const _event of stream) {
 			// consume
