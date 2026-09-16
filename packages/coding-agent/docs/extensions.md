@@ -449,9 +449,17 @@ pi.on("session_before_fork", async (event, ctx) => {
 After a successful fork or clone, pi emits `session_shutdown` for the old extension instance, reloads and rebinds extensions for the new session, then emits `session_start` with `reason: "fork"` and `previousSessionFile`.
 Do cleanup work in `session_shutdown`, then reestablish any in-memory state in `session_start`.
 
-#### session_before_compact / session_compact / session_compact_failed
+#### session_before_auto_compact / session_before_compact / session_compact / session_compact_failed
 
-Fired on compaction. See [compaction.md](compaction.md) for details.
+`session_before_auto_compact` fires first for threshold/overflow triggers, before preparation or summarization authentication. Return `{ newContext: { handoff? } }` to claim the trigger with a fresh window, `{ cancel: true }` to suppress the trigger, or nothing to continue with ordinary compaction.
+
+```typescript
+pi.on("session_before_auto_compact", ({ reason, branchEntries, pendingMessages }) => {
+  return { newContext: { handoff: buildRecoveryRecord(branchEntries, pendingMessages, reason) } };
+});
+```
+
+`session_before_compact` fires after deterministic compaction preparation but before any summary request. See [compaction.md](compaction.md) for details.
 
 ```typescript
 pi.on("session_before_compact", async (event, ctx) => {
@@ -1098,6 +1106,20 @@ ctx.compact({
   },
 });
 ```
+
+### ctx.newContext()
+
+Start a fresh context window without a summary. Applied immediately when idle, otherwise after the current tool batch. The optional handoff becomes the first message of the new window. See [compaction.md](compaction.md#fresh-context-windows).
+
+```typescript
+ctx.newContext({ handoff: "Resume at step 3; notes are in .pi/notes/plan.md" });
+```
+
+A tool can request the same thing by returning `newContext: { handoff? }` on its result.
+
+### ctx.getCompactionSettings()
+
+Effective compaction settings for the active model: `{ enabled, reserveTokens, keepRecentTokens }`.
 
 ### ctx.getSystemPrompt()
 

@@ -47,7 +47,7 @@ import type {
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { BashResult } from "../bash-executor.ts";
-import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
+import type { CompactionPreparation, CompactionResult, CompactionSettings } from "../compaction/index.ts";
 import type { EventBus } from "../event-bus.ts";
 import type { ExecOptions, ExecResult } from "../exec.ts";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
@@ -301,6 +301,11 @@ export interface CompactOptions {
 	onError?: (error: Error) => void;
 }
 
+/** Request a fresh context window. The handoff becomes the first state of the new window. */
+export interface NewContextOptions {
+	handoff?: string;
+}
+
 /**
  * Context passed to extension event handlers.
  */
@@ -344,6 +349,13 @@ export interface ExtensionContext {
 	getContextUsage(): ContextUsage | undefined;
 	/** Trigger compaction without awaiting completion. */
 	compact(options?: CompactOptions): void;
+	/**
+	 * Start a fresh context window without a summary. Applied immediately when idle; otherwise
+	 * after the current tool batch, before the next assistant response.
+	 */
+	newContext(options?: NewContextOptions): void;
+	/** Effective compaction settings for the active model. */
+	getCompactionSettings(): CompactionSettings;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
 }
@@ -590,6 +602,15 @@ export interface SessionBeforeForkEvent {
 	position: "before" | "at";
 }
 
+/** Fired before automatic compaction preparation or summarization auth. */
+export interface SessionBeforeAutoCompactEvent {
+	type: "session_before_auto_compact";
+	reason: "threshold" | "overflow";
+	branchEntries: SessionEntry[];
+	/** Messages not yet persisted on the branch, when available. */
+	pendingMessages?: AgentMessage[];
+}
+
 /** Fired before context compaction (can be cancelled or customized) */
 export interface SessionBeforeCompactEvent {
 	type: "session_before_compact";
@@ -673,6 +694,7 @@ export type SessionEvent =
 	| SessionInfoChangedEvent
 	| SessionBeforeSwitchEvent
 	| SessionBeforeForkEvent
+	| SessionBeforeAutoCompactEvent
 	| SessionBeforeCompactEvent
 	| SessionCompactEvent
 	| SessionCompactFailedEvent
@@ -1168,6 +1190,12 @@ export interface SessionBeforeForkResult {
 	skipConversationRestore?: boolean;
 }
 
+export interface SessionBeforeAutoCompactResult {
+	cancel?: boolean;
+	/** Claim the automatic trigger with a fresh context window. No preparation, auth, or summary is performed. */
+	newContext?: NewContextOptions;
+}
+
 export interface SessionBeforeCompactResult {
 	cancel?: boolean;
 	compaction?: CompactionResult;
@@ -1263,6 +1291,10 @@ export interface ExtensionAPI {
 		handler: ExtensionHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>,
 	): void;
 	on(event: "session_before_fork", handler: ExtensionHandler<SessionBeforeForkEvent, SessionBeforeForkResult>): void;
+	on(
+		event: "session_before_auto_compact",
+		handler: ExtensionHandler<SessionBeforeAutoCompactEvent, SessionBeforeAutoCompactResult>,
+	): void;
 	on(
 		event: "session_before_compact",
 		handler: ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
@@ -1731,6 +1763,8 @@ export interface ExtensionContextActions {
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;
+	newContext: (options?: NewContextOptions) => void;
+	getCompactionSettings: () => CompactionSettings;
 	getSystemPrompt: () => string;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;
 }

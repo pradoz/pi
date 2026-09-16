@@ -20,6 +20,8 @@ function createContext(tokens: number | null, compact = vi.fn()): ExtensionConte
 		shutdown: vi.fn(),
 		getContextUsage: () => ({ tokens, contextWindow: 200_000, percent: tokens === null ? null : tokens / 2000 }),
 		compact,
+		newContext: vi.fn(),
+		getCompactionSettings: () => ({ enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 }),
 		getSystemPrompt: () => "",
 	};
 }

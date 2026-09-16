@@ -99,6 +99,8 @@ describe("ExtensionRunner", () => {
 		shutdown: () => {},
 		getContextUsage: () => undefined,
 		compact: () => {},
+		newContext: () => {},
+		getCompactionSettings: () => ({ enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 }),
 		getSystemPrompt: () => "",
 		getScopedModels: () => [],
 	};

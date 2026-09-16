@@ -2054,6 +2054,8 @@ export class InteractiveMode {
 				this.shutdownRequested = true;
 			},
 			getContextUsage: () => this.session.getContextUsage(),
+			newContext: (options) => this.session.newContext(options),
+			getCompactionSettings: () => this.settingsManager.getCompactionSettings(this.session.model),
 			compact: (options) => {
 				void (async () => {
 					try {
@@ -3393,6 +3395,15 @@ export class InteractiveMode {
 					this.session.abortCompaction();
 				};
 				this.showStatusIndicator(new CompactionStatusIndicator(this.ui, event.reason));
+				this.ui.requestRender();
+				break;
+			}
+
+			case "context_window": {
+				// Everything before the boundary left model context; redraw the chat from the fresh window.
+				this.chatContainer.clear();
+				this.renderSessionEntries(this.sessionManager.buildContextEntries());
+				this.footer.invalidate();
 				this.ui.requestRender();
 				break;
 			}

@@ -88,6 +88,20 @@ export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	systemMessage?: SystemMessage;
 }
 
+/**
+ * Fresh context window boundary. Entries before it leave active model context without a
+ * generated summary; the transcript stays complete. The optional handoff is the first state
+ * of the new window.
+ */
+export interface ContextWindowEntry extends SessionEntryBase {
+	type: "context_window";
+	handoff?: string;
+	/** "manual" for /new-context or ctx.newContext(), "tool" for a tool result, else the auto-compaction trigger. */
+	reason: "manual" | "tool" | "threshold" | "overflow";
+	/** Complete prompt and tool state at this boundary. */
+	systemMessage?: SystemMessage;
+}
+
 export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
 	type: "branch_summary";
 	fromId: string;
@@ -155,6 +169,7 @@ export type SessionEntry =
 	| ThinkingLevelChangeEntry
 	| ModelChangeEntry
 	| CompactionEntry
+	| ContextWindowEntry
 	| BranchSummaryEntry
 	| CustomEntry
 	| CustomMessageEntry
@@ -415,14 +430,25 @@ export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage
 		const summary = createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
 		return entry.systemMessage ? [entry.systemMessage, summary] : [summary];
 	}
+	if (entry.type === "context_window") {
+		const handoff = createCustomMessage(
+			"context_window",
+			`Fresh context window (${entry.reason}). Earlier conversation left active context without a summary and remains in the session transcript.${entry.handoff ? `\n\n<handoff>\n${entry.handoff}\n</handoff>` : ""}`,
+			true,
+			{ reason: entry.reason },
+			entry.timestamp,
+		);
+		return entry.systemMessage ? [entry.systemMessage, handoff] : [handoff];
+	}
 	return [];
 }
 
 /**
  * Build the active, compaction-aware session entry list.
  *
- * This follows the current leaf path. If the path contains compaction entries,
- * the latest compaction is represented by the compaction entry itself, followed
+ * This follows the current leaf path. A `context_window` entry is a hard boundary: it and
+ * everything after it form the active context. Otherwise, if the path contains compaction
+ * entries, the latest compaction is represented by the compaction entry itself, followed
  * by the kept entries starting at firstKeptEntryId and all entries after the
  * compaction entry. Older summarized entries are omitted.
  */
@@ -432,36 +458,24 @@ export function buildContextEntries(
 	byId?: Map<string, SessionEntry>,
 ): SessionEntry[] {
 	const path = buildSessionPath(entries, leafId, byId);
-	let compaction: CompactionEntry | null = null;
-
-	for (const entry of path) {
-		if (entry.type === "compaction") {
-			compaction = entry;
-		}
+	let boundaryIdx = path.length - 1;
+	while (boundaryIdx >= 0 && path[boundaryIdx].type !== "compaction" && path[boundaryIdx].type !== "context_window") {
+		boundaryIdx--;
 	}
+	if (boundaryIdx < 0) return path;
 
-	if (!compaction) {
-		return path;
-	}
+	const boundary = path[boundaryIdx];
+	if (boundary.type === "context_window") return path.slice(boundaryIdx);
+	if (boundary.type !== "compaction") return path;
 
-	const compactionIdx = path.findIndex((entry) => entry.id === compaction.id);
-	if (compactionIdx < 0) {
-		return path;
-	}
-
-	const contextEntries: SessionEntry[] = [compaction];
-	let foundFirstKept = false;
-	for (let i = 0; i < compactionIdx; i++) {
-		const entry = path[i];
-		if (entry.id === compaction.firstKeptEntryId) {
-			foundFirstKept = true;
-		}
-		if (foundFirstKept && !(entry.type === "message" && entry.message.role === "system")) {
-			contextEntries.push(entry);
-		}
-	}
-	contextEntries.push(...path.slice(compactionIdx + 1));
-	return contextEntries;
+	const firstKeptIdx = path.findIndex((entry) => entry.id === boundary.firstKeptEntryId);
+	const kept =
+		firstKeptIdx < 0
+			? []
+			: path
+					.slice(firstKeptIdx, boundaryIdx)
+					.filter((entry) => !(entry.type === "message" && entry.message.role === "system"));
+	return [boundary, ...kept, ...path.slice(boundaryIdx + 1)];
 }
 
 /**
@@ -1140,6 +1154,23 @@ export class SessionManager {
 			details,
 			usage,
 			fromHook,
+			...(systemMessage ? { systemMessage: { ...systemMessage, timestamp: new Date(timestamp).getTime() } } : {}),
+		};
+		this._appendEntry(entry);
+		return entry.id;
+	}
+
+	/** Append a fresh context window boundary as child of current leaf, then advance leaf. Returns entry id. */
+	appendContextWindow(reason: ContextWindowEntry["reason"], handoff?: string): string {
+		const timestamp = new Date().toISOString();
+		const systemMessage = getCurrentSystemMessage(this.buildSessionContext().messages);
+		const entry: ContextWindowEntry = {
+			type: "context_window",
+			id: generateId(this.byId),
+			parentId: this.leafId,
+			timestamp,
+			reason,
+			...(handoff ? { handoff } : {}),
 			...(systemMessage ? { systemMessage: { ...systemMessage, timestamp: new Date(timestamp).getTime() } } : {}),
 		};
 		this._appendEntry(entry);

@@ -147,6 +147,29 @@ Extensions can store any JSON-serializable data in `details`. The default compac
 
 See [`prepareCompaction()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) and [`compact()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) for the implementation. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage }`.
 
+### Fresh Context Windows
+
+A `context_window` entry is a hard boundary without a summary: it and everything after it form the active context, and everything before it stays only in the transcript. No summarization request is made, so it works without summarization credentials and costs no tokens. An optional `handoff` is delivered as the first message of the new window.
+
+```typescript
+interface ContextWindowEntry {
+  type: "context_window";
+  id: string;
+  parentId: string;
+  timestamp: string;
+  handoff?: string;
+  reason: "manual" | "tool" | "threshold" | "overflow";
+}
+```
+
+Three ways to create one:
+
+- A tool result sets `newContext: { handoff? }`. The boundary is applied after the complete tool batch, before the next assistant response. Any failed or interrupted sibling cancels the request.
+- An extension calls `ctx.newContext({ handoff? })`. Applied immediately when idle, otherwise after the current tool batch.
+- A `session_before_auto_compact` handler returns `{ newContext: { handoff? } }` before compaction preparation or summarization authentication. This is the earliest and cheapest way to claim threshold/overflow triggers.
+
+A later compaction only summarizes entries inside the current window.
+
 ## Branch Summarization
 
 ### When It Triggers

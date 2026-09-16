@@ -80,7 +80,9 @@ import {
 	type MessageEndEvent,
 	type MessageStartEvent,
 	type MessageUpdateEvent,
+	type NewContextOptions,
 	type ReplacedSessionContext,
+	type SessionBeforeAutoCompactResult,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
 	type SessionCompactFailedEvent,
@@ -103,7 +105,13 @@ import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
-import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
+import type {
+	BranchSummaryEntry,
+	CompactionEntry,
+	ContextWindowEntry,
+	SessionEntry,
+	SessionManager,
+} from "./session-manager.ts";
 import { getLatestCompactionEntry } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
@@ -162,6 +170,7 @@ export type AgentSessionEvent =
 			followUp: readonly string[];
 	  }
 	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
+	| { type: "context_window"; entry: ContextWindowEntry }
 	| { type: "entry_appended"; entry: SessionEntry }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
@@ -335,6 +344,10 @@ export class AgentSession {
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
+	/** Fresh-window request from a tool result or ctx.newContext(); applied before the next assistant response. */
+	private _pendingNewContext:
+		| ({ reason: ContextWindowEntry["reason"]; batchComplete?: boolean } & NewContextOptions)
+		| undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
 
@@ -524,6 +537,9 @@ export class AgentSession {
 				: undefined;
 
 			const content = hookResult?.content ?? result.content ?? [];
+			if (result.newContext && !(hookResult?.isError ?? isError)) {
+				this._pendingNewContext = { ...result.newContext, reason: "tool", batchComplete: false };
+			}
 			// Runs after the extension hook so images injected or replaced by extensions are normalized too.
 			const normalizedContent = await normalizeToolResultImages(content, {
 				autoResizeImages: this.settingsManager.getImageAutoResize(),
@@ -543,6 +559,12 @@ export class AgentSession {
 	}
 
 	private async _compactBeforeNextAssistantResponse(context: AgentContext): Promise<AgentContext> {
+		if (this._pendingNewContext) {
+			if (this._pendingNewContext.reason !== "tool" || this._pendingNewContext.batchComplete) {
+				this._applyNewContext(this._pendingNewContext);
+				return { ...context, messages: this.agent.state.messages.slice() };
+			}
+		}
 		const model = this.model;
 		const settings = this.settingsManager.getCompactionSettings(model);
 
@@ -734,6 +756,14 @@ export class AgentSession {
 		// extension and listener dispatch above also picks up messages that turn_end
 		// handlers queued.
 		if (event.type === "turn_end") {
+			// A tool-requested boundary is atomic with its complete batch: any failed sibling cancels it.
+			if (this._pendingNewContext?.reason === "tool") {
+				if (event.toolResults.some((result) => result.isError)) {
+					this._pendingNewContext = undefined;
+				} else {
+					this._pendingNewContext.batchComplete = true;
+				}
+			}
 			this._flushPendingCustomMessages();
 		}
 	};
@@ -1175,6 +1205,16 @@ export class AgentSession {
 				finalError: msg.errorMessage,
 			});
 			this._retryAttempt = 0;
+		}
+
+		if (this._pendingNewContext) {
+			if (this._pendingNewContext.reason === "tool" && !this._pendingNewContext.batchComplete) {
+				// No successful turn_end means the tool batch was interrupted; do not leak the request.
+				this._pendingNewContext = undefined;
+			} else {
+				this._applyNewContext(this._pendingNewContext);
+				return this.agent.hasQueuedMessages();
+			}
 		}
 
 		if (await this._checkCompaction(msg)) {
@@ -1991,6 +2031,31 @@ export class AgentSession {
 	}
 
 	/**
+	 * Commit a fresh context window boundary: append the entry, rebuild agent state from it,
+	 * and notify extensions. No summarization request is made.
+	 */
+	private _applyNewContext(request: { reason: ContextWindowEntry["reason"] } & NewContextOptions): void {
+		this._pendingNewContext = undefined;
+		const id = this.sessionManager.appendContextWindow(request.reason, request.handoff?.trim() || undefined);
+		this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+		const entry = this.sessionManager.getEntry(id) as ContextWindowEntry | undefined;
+		if (entry) this._emit({ type: "context_window", entry });
+	}
+
+	/** Start a fresh context window now if idle, otherwise after the current tool batch. */
+	newContext(options?: NewContextOptions): void {
+		if (this._compactionAbortController || this._autoCompactionAbortController) {
+			throw new Error("Cannot start a context window while compaction is in progress");
+		}
+		const request = { handoff: options?.handoff, reason: "manual" as const };
+		if (this.isStreaming) {
+			this._pendingNewContext = request;
+			return;
+		}
+		this._applyNewContext(request);
+	}
+
+	/**
 	 * Manually compact the session context.
 	 *
 	 * This is the manual entry point used by `/compact`, RPC, and extensions. It is
@@ -2018,7 +2083,6 @@ export class AgentSession {
 			}
 
 			const settings = this.settingsManager.getCompactionSettings(model);
-			const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
 
 			const pathEntries = this.sessionManager.getBranch();
 
@@ -2069,6 +2133,8 @@ export class AgentSession {
 				usage = extensionCompaction.usage;
 				details = extensionCompaction.details;
 			} else {
+				// Summarization credentials are only needed for the default summary.
+				const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
 				// Shared default summary generator, also used by automatic compaction.
 				const result = await this._runDefaultCompaction(
 					preparation,
@@ -2319,9 +2385,24 @@ export class AgentSession {
 				return false;
 			}
 
-			const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
-
 			const pathEntries = this.sessionManager.getBranch();
+
+			// Extensions may claim an automatic trigger before Pi prepares or authenticates a summary.
+			if (this._extensionRunner.hasHandlers("session_before_auto_compact")) {
+				const extensionResult = (await this._extensionRunner.emit({
+					type: "session_before_auto_compact",
+					reason,
+					branchEntries: pathEntries,
+					...(this._pendingCustomMessages.length > 0
+						? { pendingMessages: this._pendingCustomMessages.slice() }
+						: {}),
+				})) as SessionBeforeAutoCompactResult | undefined;
+				if (extensionResult?.cancel) return false;
+				if (extensionResult?.newContext) {
+					this._applyNewContext({ ...extensionResult.newContext, reason });
+					return willRetry || this.agent.hasQueuedMessages();
+				}
+			}
 
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
@@ -2382,6 +2463,8 @@ export class AgentSession {
 				usage = extensionCompaction.usage;
 				details = extensionCompaction.details;
 			} else {
+				// Summarization credentials are only needed for the default summary.
+				const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
 				// Shared default summary generator, also used by manual compaction.
 				const compactResult = await this._runDefaultCompaction(
 					preparation,
@@ -2700,6 +2783,8 @@ export class AgentSession {
 					this._extensionShutdownHandler?.();
 				},
 				getContextUsage: () => this.getContextUsage(),
+				newContext: (options) => this.newContext(options),
+				getCompactionSettings: () => this.settingsManager.getCompactionSettings(this.model),
 				compact: (options) => {
 					void (async () => {
 						try {

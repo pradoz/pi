@@ -391,6 +391,11 @@ export interface AgentToolResult<T> {
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
 	 */
 	terminate?: boolean;
+	/**
+	 * Request a fresh context window after the current tool batch completes successfully.
+	 * The host decides how to apply it; the agent loop ignores this field.
+	 */
+	newContext?: { handoff?: string };
 }
 
 /**
